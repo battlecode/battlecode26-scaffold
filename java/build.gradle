@@ -1,5 +1,7 @@
 //////// General configuration ////////
 
+import groovy.json.JsonSlurper
+
 apply plugin: 'java'
 apply plugin: 'scala'
 
@@ -72,13 +74,12 @@ configurations.all {
 
 static String[] getVersionsFromWeb(boolean onSaturn) {
   String[] urls = ["https://api.battlecode.org/api/episode/e/bc26/?format=json"]
-  //String[] urls = ["https://api.battlecode.org/api/episode/e/bc24/?format=json"]
   String engineVersion = null
   String clientVersion = null
   for (String url : urls) {
     try {
       String episodeInfo = new URL(url).text.trim()
-      def json = new groovy.json.JsonSlurper().parseText(episodeInfo)
+      def json = new JsonSlurper().parseText(episodeInfo)
       if (onSaturn) {
         engineVersion = json.release_version_saturn
       } else {
@@ -90,7 +91,7 @@ static String[] getVersionsFromWeb(boolean onSaturn) {
       System.out.println(ex.toString())
     }
   }
-  return new String[]{engineVersion, clientVersion}
+  return [engineVersion, clientVersion]
 }
 
 task version {
@@ -207,7 +208,7 @@ dependencies {
   testImplementation group: 'junit', name: 'junit', version: '4.13.2'
 
   // The Battlecode engine.
-  implementation group: 'org.battlecode', name: 'battlecode26-java', version: versions.battlecodeEngine
+  implementation group: 'org.battlecode', name: 'battlecode26', version: versions.battlecodeEngine
 
   // The Battlecode client.
   client group: 'org.battlecode', name: clientName + clientType, version: versions.battlecodeClient
@@ -277,9 +278,7 @@ def defaultClassLocation = sourceSets.main.output.classesDirs.getAsPath()
 def defaultReplayName = truncateString(project.property('teamA') + '-vs-' + project.property('teamB') + '-on-' + project.property('maps'), 80)
 def defaultReplayFile = 'matches/' + defaultReplayName + '.bc26'
 
-task run(type: JavaExec) {
-  description 'Runs a match without starting the client.'
-  group 'battlecode'
+task runJava(type: JavaExec) {
   dependsOn build
 
   mainClass = 'battlecode.server.Main'
@@ -301,6 +300,8 @@ task run(type: JavaExec) {
     '-Dbc.engine.show-indicators=' + (project.findProperty('showIndicators') ?: 'true'),
     '-Dbc.game.team-a=' + project.property('teamA'),
     '-Dbc.game.team-b=' + project.property('teamB'),
+    '-Dbc.game.team-a.language=' + (project.findProperty('languageA') ?: 'java'),
+    '-Dbc.game.team-b.language=' + (project.findProperty('languageB') ?: 'java'),
     '-Dbc.game.team-a.url=' + (project.findProperty('classLocationA') ?: defaultClassLocation),
     '-Dbc.game.team-b.url=' + (project.findProperty('classLocationB') ?: defaultClassLocation),
     '-Dbc.game.team-a.package=' + (project.findProperty('packageNameA') ?: project.property('teamA')),
@@ -312,6 +313,26 @@ task run(type: JavaExec) {
   ]
 }
 
+task startPy(type: Exec, dependsOn: [':engine:build']) {
+  commandLine 'python', 'engine/src/crossplay_python/main.py',
+  '--teamA', (project.findProperty('languageA') == 'java' ? '/' : project.property('teamA')),
+  '--teamB', (project.findProperty('languageB') == 'java' ? '/' : project.property('teamB')),
+  '--new-process'
+}
+
+task runPy(dependsOn: ['runJava']) {
+  mustRunAfter startPy
+}
+
+task run(dependsOn: ['runJava']) {
+  description 'Runs a match without starting the client.'
+  group 'battlecode'
+}
+
+if (project.hasProperty('languageA') && project.property('languageA') == 'python' ||
+    project.hasProperty('languageB') && project.property('languageB') == 'python') {
+  run.dependsOn startPy, runPy
+}
 
 //////// Informational ////////
 
