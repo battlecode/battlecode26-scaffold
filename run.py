@@ -115,14 +115,17 @@ def download_file(url, output_name):
         os.mkdir(".temp")
     elif os.path.exists(output_path):
         os.remove(output_path)
+    
+    print("Starting download...")
 
     if properties["on_saturn"]:
         # GCS download
+        print("GCS download detected.")
 
         from google.cloud import storage
 
         client = storage.Client()
-        bucket = client.bucket("mitbattlecode-releases")
+        bucket = client.bucket(bucket_name="mitbattlecode-releases", user_project="mitbattlecode")
         blob = bucket.blob(url)
         blob.download_to_filename(output_path)
 
@@ -179,6 +182,32 @@ def set_local_version(ver_data, new_version: str):
         vf.write(new_version)
 
 
+def install_current_version(ver_data, args):
+    local_version_target = get_local_version(ver_data)
+    # get version from python package currently installed
+    local_version = None
+
+    try:
+        from importlib.metadata import version
+        local_version = version("battlecode26")
+    except Exception as e:
+        print(f"Failed to get local package version: {e}")
+    
+    # get rid of any pre-release tags for comparison
+    if local_version is not None:
+        local_version = local_version.split('-')[0]
+
+    if local_version_target is not None:
+        local_version_target = local_version_target.split('-')[0]
+    
+    if local_version == local_version_target and not args.force_reinstall:
+        print(f"Current version {local_version} is already installed.")
+        return True
+
+    print(f"updating {local_version} to {local_version_target}...")
+    return ver_data["install"](ver_data, local_version_target)
+
+
 def get_server_version(ver_data) -> str | None:
     """Fetch the latest version from the server"""
     url = "https://api.battlecode.org/api/episode/e/bc26/?format=json"
@@ -194,9 +223,12 @@ def get_server_version(ver_data) -> str | None:
         return None
 
 
-def run_update(ver_data):
+def run_update(ver_data, args):
     # get new version from server
-    new_version = get_server_version(ver_data)
+    if args.debug: # TODO remove later
+        new_version = "1.1.0-alpha"
+    else:
+        new_version = get_server_version(ver_data)
     # Download package
     filename = ver_data["get_filename"](new_version)
     try:
@@ -205,8 +237,11 @@ def run_update(ver_data):
     except Exception as e:
         print(f"Failed to download package: {e}")
         return
+    
+    success = install_current_version(ver_data, args)
 
-    if not ver_data["install"](ver_data, new_version):
+    if not success:
+        print("Installation failed!")
         return
 
     # Update version file
@@ -277,7 +312,12 @@ def task_test(args):
 
 def task_update(args):
     """Update the engine."""
-    run_update(ENGINE_VER_DATA)
+    run_update(ENGINE_VER_DATA, args)
+
+
+def task_install_current_version(args):
+    """Install the current engine version."""
+    install_current_version(ENGINE_VER_DATA, args)
 
 
 def task_verify(args):
@@ -292,7 +332,18 @@ def task_verify(args):
 def task_run(args):
     """Run the Python cross-play engine."""
     from battlecode26 import _main
-    _main(args.p1, args.p2)
+    args_for_main = ['--new-process', '--teamA', args.p1, '--teamB', args.p2]
+
+    if args.p1_dir:
+        args_for_main += ['--dirA', args.p1_dir]
+    
+    if args.p2_dir:
+        args_for_main += ['--dirB', args.p2_dir]
+    
+    if args.debug:
+        args_for_main += ['--debug']
+
+    _main(tuple(args_for_main))
 
 
 def task_zip_submission(args):
@@ -316,6 +367,7 @@ if __name__ == "__main__":
         "update": task_update,
         "verify": task_verify,
         "run": task_run,
+        "install_current_version": task_install_current_version,
         "zip_submission": task_zip_submission,
     }
 
@@ -416,6 +468,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Dev use only. Token for accessing private gcloud files",
+    )
+    parser.add_argument(
+        "--force-reinstall",
+        type=str_to_bool,
+        default=False,
+        help="Force reinstalling the current version of the Python package",
     )
     args = parser.parse_args()
 
